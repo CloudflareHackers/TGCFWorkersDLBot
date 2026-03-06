@@ -29,8 +29,11 @@ export class TGDownloader {
   async connect(apiId, apiHash, botToken) {
     try {
       this.onLog('info', 'Initializing MTProto connection...');
+      this._credentials = { apiId, apiHash, botToken };
       this.client = new TelegramClient('tg_bot', parseInt(apiId), apiHash, {
-        connectionRetries: 5,
+        connectionRetries: 10,
+        retryDelay: 2000,
+        autoReconnect: true,
         useWSS: true,
       });
       this.onLog('info', 'Connecting to Telegram servers...');
@@ -40,6 +43,10 @@ export class TGDownloader {
       const me = await this.client.getMe();
       this.onLog('success', `Connected as @${me.username} (${me.firstName})`);
       this.onLog('dim', `Session saved. Will reconnect faster next time.`);
+      
+      // Monitor connection state
+      this._startConnectionMonitor();
+      
       return { success: true, botInfo: me };
     } catch (error) {
       this.connected = false;
@@ -49,11 +56,83 @@ export class TGDownloader {
   }
 
   async disconnect() {
+    this._stopConnectionMonitor();
     if (this.client) {
       try { await this.client.disconnect(); } catch {}
       this.client = null;
       this.connected = false;
       this.onLog('info', 'Disconnected from Telegram.');
+    }
+  }
+
+  /**
+   * Attempt to reconnect using saved credentials.
+   * Returns true if successful.
+   */
+  async reconnect() {
+    if (this.connected && this.client) {
+      // Check if actually connected by pinging
+      try {
+        await this.client.getMe();
+        return true;
+      } catch {
+        this.connected = false;
+      }
+    }
+
+    const creds = this._credentials || this.getSavedCredentials();
+    if (!creds) {
+      this.onLog('error', 'No saved credentials to reconnect.');
+      return false;
+    }
+
+    this.onLog('info', '🔄 Reconnecting...');
+    try {
+      await this.connect(creds.apiId, creds.apiHash, creds.botToken);
+      return true;
+    } catch (e) {
+      this.onLog('error', `Reconnect failed: ${e.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Ensure connection is alive before performing an operation.
+   * Auto-reconnects if disconnected.
+   */
+  async ensureConnected() {
+    if (this.connected && this.client) {
+      try {
+        // Quick ping to verify connection
+        await this.client.invoke(new Api.Ping({ pingId: bigInt(Date.now()) }));
+        return true;
+      } catch {
+        this.connected = false;
+        this.onLog('warn', 'Connection lost. Attempting auto-reconnect...');
+      }
+    }
+    return this.reconnect();
+  }
+
+  _startConnectionMonitor() {
+    this._stopConnectionMonitor();
+    this._connectionMonitor = setInterval(async () => {
+      if (!this.connected || !this.client) return;
+      try {
+        // Silent health check every 30s
+        if (this.client._sender && !this.client._sender._userConnected) {
+          this.connected = false;
+          if (this.onConnectionLost) this.onConnectionLost();
+          this.onLog('warn', '⚠️ Connection lost. Will auto-reconnect on next action.');
+        }
+      } catch {}
+    }, 30000);
+  }
+
+  _stopConnectionMonitor() {
+    if (this._connectionMonitor) {
+      clearInterval(this._connectionMonitor);
+      this._connectionMonitor = null;
     }
   }
 
@@ -190,8 +269,11 @@ export class TGDownloader {
    * @param {number} connections - parallel connections (1-8)
    */
   async downloadFile(fileRef, connections = 1) {
-    if (!this.client || !this.connected) {
-      throw new Error('Not connected. Please connect first.');
+    // Auto-reconnect if needed
+    if (!this.connected || !this.client) {
+      this.onLog('warn', 'Not connected. Attempting auto-reconnect...');
+      const ok = await this.reconnect();
+      if (!ok) throw new Error('Not connected and auto-reconnect failed.');
     }
 
     connections = Math.min(Math.max(1, connections), 8);
