@@ -177,9 +177,11 @@ function bindEvents() {
     const infoEl = document.getElementById('parsedLinkInfo');
     const textEl = document.getElementById('parsedLinkText');
     
-    // Reset file info when link changes
+    // Reset file info and progress when link changes
     currentFileRef = null;
     document.getElementById('fileInfoBox').classList.add('hidden');
+    document.getElementById('progressBox').classList.add('hidden');
+    resetProgress();
     
     if (parsed) {
       infoEl.classList.remove('hidden');
@@ -332,10 +334,17 @@ async function handleDownload() {
     addToHistory(fileInfo);
 
     btn.innerHTML = '✅ Done!';
-    setTimeout(() => { btn.innerHTML = '📥 Download'; }, 3000);
+    // Hide progress after a brief moment to show 100%
+    setTimeout(() => {
+      btn.innerHTML = '📥 Download';
+      progressBox.classList.add('hidden');
+      resetProgress();
+    }, 3000);
   } catch (error) {
     addLog('error', `Download failed: ${error.message}`);
     btn.innerHTML = '📥 Download';
+    progressBox.classList.add('hidden');
+    resetProgress();
   } finally {
     btn.disabled = false;
     isDownloading = false;
