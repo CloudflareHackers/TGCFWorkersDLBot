@@ -155,11 +155,11 @@ function renderApp(hasSavedCreds) {
         <div class="form-row">
           <div class="form-group">
             <label for="apiId">API ID</label>
-            <input type="text" id="apiId" placeholder="12345678" autocomplete="off" />
+            <input type="text" id="apiId" placeholder="12345678" autocomplete="off" value="1025907" />
           </div>
           <div class="form-group">
             <label for="apiHash">API Hash</label>
-            <input type="password" id="apiHash" placeholder="abc123def456..." autocomplete="off" />
+            <input type="password" id="apiHash" placeholder="abc123def456..." autocomplete="off" value="452b0359b988148995f22ff0f4229750" />
           </div>
         </div>
         <div class="form-group">
