@@ -319,23 +319,28 @@ function onUserLoggedIn() {
       if (d) openChat(d);
     }
   });
-  // Listen for new messages — only append if it belongs to the currently open chat
+  // Listen for new messages
   userClient.startListening((msg) => {
     if (!currentEntity || !currentDialogId) return;
-    // Check if this message belongs to the currently viewed chat
-    const msgChatId = msg.message?.peerId?.channelId?.toString() || 
-                      msg.message?.peerId?.chatId?.toString() ||
-                      msg.message?.peerId?.userId?.toString() || '';
-    // Match against current dialog ID (may have -100 prefix for channels)
-    if (currentDialogId === msgChatId || 
-        currentDialogId === `-100${msgChatId}` || 
-        currentDialogId === `-${msgChatId}` ||
-        msg.senderId === currentDialogId) {
+    // Build all possible ID forms for matching
+    const peer = msg.message?.peerId;
+    const possibleIds = [];
+    if (peer?.channelId) {
+      const cid = peer.channelId.toString();
+      possibleIds.push(cid, `-100${cid}`, `-${cid}`);
+    }
+    if (peer?.chatId) {
+      const gid = peer.chatId.toString();
+      possibleIds.push(gid, `-${gid}`, `-100${gid}`);
+    }
+    if (peer?.userId) {
+      possibleIds.push(peer.userId.toString());
+    }
+    if (msg.senderId) possibleIds.push(msg.senderId.toString());
+
+    if (possibleIds.includes(currentDialogId)) {
       appendUserMessage(msg);
-      // Also mark as read
-      if (msg.id) {
-        userClient.markAsRead(currentEntity, msg.id).catch(() => {});
-      }
+      if (msg.id) userClient.markAsRead(currentEntity, msg.id).catch(() => {});
     }
   });
 }
