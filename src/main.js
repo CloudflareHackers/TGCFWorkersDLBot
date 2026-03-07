@@ -993,30 +993,59 @@ function appendMessageToChatPopup(msg) {
   const time = msg.date ? new Date(msg.date).toLocaleTimeString() : '';
   const div = document.createElement('div');
 
+  // Reply-to context bar
+  let replyBar = '';
+  if (msg.replyToText) {
+    const short = msg.replyToText.length > 60 ? msg.replyToText.slice(0, 60) + '...' : msg.replyToText;
+    replyBar = `<div class="reply-quote-bar" style="margin-bottom:4px;"><span class="reply-quote-text">↩ ${escapeHtml(short)}</span></div>`;
+  }
+
   if (msg.fromBot) {
     // Our reply (right-aligned)
     div.className = 'reply-sent';
     div.innerHTML = `
+      ${replyBar}
       <div class="reply-sent-text">${escapeHtml(msg.text)}</div>
       <div class="reply-sent-time">${time}</div>
     `;
   } else {
     // Their message (left-aligned, clickable to reply-to)
     div.className = 'reply-received clickable-msg';
+    if (msg.id) div.id = `botmsg_${msg.id}`;
     const content = msg.text || (msg.hasMedia ? '' : '[Empty]');
-    let photoHtml = '';
+
+    // Photo / media rendering
+    let mediaHtml = '';
     if (msg.thumbnailUrl) {
-      photoHtml = `<img src="${msg.thumbnailUrl}" class="chat-photo-thumb" alt="📷 Photo" onclick="event.stopPropagation(); window._showPhotoLightbox && window._showPhotoLightbox('${msg.thumbnailUrl}', ${msg.id || 0})" />`;
+      mediaHtml = `<div class="media-photo-container"><img src="${msg.thumbnailUrl}" class="media-photo-thumb" alt="📷" onclick="event.stopPropagation(); window._showPhotoLightbox && window._showPhotoLightbox('${msg.thumbnailUrl}', ${msg.id || 0})" /></div>`;
     } else if (msg.hasMedia && !msg.text) {
-      photoHtml = '<div class="chat-photo-placeholder">📷 Photo</div>';
+      mediaHtml = `<div class="media-photo-container"><div class="media-photo-placeholder" onclick="event.stopPropagation();"><span>📷</span><span class="media-photo-label">Photo</span><span class="media-photo-load">Click to view</span></div></div>`;
     }
+
+    // File download button for non-photo media
+    let fileHtml = '';
+    if (msg.hasMedia && msg._rawMessage?.media?.document) {
+      const doc = msg._rawMessage.media.document;
+      let fName = 'File';
+      for (const a of doc.attributes || []) {
+        if (a.className === 'DocumentAttributeFilename') fName = a.fileName;
+      }
+      const fSize = doc.size ? formatFileSize(Number(doc.size)) : '';
+      const fIcon = getFileIcon(doc.mimeType || '', fName);
+      fileHtml = `<div class="media-file-container" onclick="event.stopPropagation(); window._botDownloadMedia && window._botDownloadMedia(${msg.id || 0})"><span class="media-file-icon">${fIcon}</span><span class="media-file-name">${escapeHtml(fName)} ${fSize ? '(' + fSize + ')' : ''}</span><span class="media-file-dl">📥 Download</span></div>`;
+      mediaHtml = ''; // Don't show photo placeholder for documents
+    }
+
     div.innerHTML = `
-      ${photoHtml}
+      ${replyBar}
+      ${mediaHtml}
+      ${fileHtml}
       ${content ? `<div class="reply-received-text">${escapeHtml(content)}</div>` : ''}
       <div class="reply-received-time">${time} • tap to reply ↩</div>
     `;
-    div.addEventListener('click', () => {
-      setReplyTo(msg.id, content);
+    div.addEventListener('click', (e) => {
+      if (e.target.closest('.media-photo-container') || e.target.closest('.media-file-container')) return;
+      setReplyTo(msg.id, content || '[Media]');
     });
   }
 
@@ -1041,17 +1070,96 @@ function setReplyTo(msgId, preview) {
 // Expose clearReplyTo globally for inline onclick
 window._clearReplyTo = () => { replyToMsgId = null; };
 
-// Photo lightbox — show full-size photo in overlay
-window._showPhotoLightbox = (thumbUrl, msgId) => {
-  // Create lightbox overlay
+// Photo lightbox — show full-size photo with download
+window._showPhotoLightbox = async (thumbUrl, msgId) => {
   const overlay = document.createElement('div');
   overlay.className = 'photo-lightbox';
   overlay.innerHTML = `
-    <img src="${thumbUrl}" alt="Photo" />
-    <div class="lightbox-close">✕</div>
+    <img src="${thumbUrl}" alt="Photo" id="botLightboxImg_${msgId}" />
+    <div class="lightbox-actions">
+      <button class="lightbox-btn" id="botLightboxDl_${msgId}">📥 Save</button>
+      <button class="lightbox-btn lightbox-close-btn">✕</button>
+    </div>
+    <div class="lightbox-loading hidden" id="botLightboxLoading_${msgId}">Loading full size...</div>
   `;
-  overlay.addEventListener('click', () => overlay.remove());
+  overlay.querySelector('.lightbox-close-btn').addEventListener('click', (e) => { e.stopPropagation(); overlay.remove(); });
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+  // Download button — save full photo
+  overlay.querySelector(`#botLightboxDl_${msgId}`).addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (!downloader?.connected) return;
+    // Find the raw message from the current conversation
+    const freshConvo = currentChatConvo ? await getConversation(currentChatConvo.senderId) : null;
+    const msg = freshConvo?.messages?.find(m => m.id === msgId);
+    if (msg?._rawMessage) {
+      try {
+        const { blob, fileInfo } = await downloader.downloadFile({ fileName: `photo_${msgId}.jpg`, fileSize: 0, mimeType: 'image/jpeg', message: msg._rawMessage, hasMedia: true });
+        downloader.saveBlobAs(blob, fileInfo.fileName);
+      } catch (err) { addLog('error', `Photo save failed: ${err.message}`); }
+    }
+  });
+
   document.body.appendChild(overlay);
+
+  // Try to load full-size photo
+  if (downloader?.connected && currentChatConvo) {
+    const freshConvo = await getConversation(currentChatConvo.senderId);
+    const msg = freshConvo?.messages?.find(m => m.id === msgId);
+    if (msg?._rawMessage) {
+      const ld = overlay.querySelector(`#botLightboxLoading_${msgId}`);
+      if (ld) ld.classList.remove('hidden');
+      try {
+        const fullUrl = await downloader.downloadFullPhoto(msg._rawMessage);
+        if (fullUrl) {
+          const img = overlay.querySelector(`#botLightboxImg_${msgId}`);
+          if (img) img.src = fullUrl;
+        }
+      } catch {}
+      if (ld) ld.classList.add('hidden');
+    }
+  }
+};
+
+// Bot mode: download media from a message in the chat popup
+window._botDownloadMedia = async (msgId) => {
+  if (!downloader?.connected || isDownloading) { addLog('warn', 'Busy or disconnected.'); return; }
+  if (!currentChatConvo) return;
+  const freshConvo = await getConversation(currentChatConvo.senderId);
+  const msg = freshConvo?.messages?.find(m => m.id === msgId);
+  if (!msg?._rawMessage) { addLog('error', 'Message not found.'); return; }
+  const rawMsg = msg._rawMessage;
+  const media = rawMsg.media;
+  if (!media) return;
+
+  let fileName = `file_${msgId}`;
+  let mimeType = 'application/octet-stream';
+  if (media.document) {
+    mimeType = media.document.mimeType || mimeType;
+    for (const a of media.document.attributes || []) {
+      if (a.className === 'DocumentAttributeFilename') fileName = a.fileName;
+    }
+  } else if (media.photo) {
+    fileName = `photo_${msgId}.jpg`;
+    mimeType = 'image/jpeg';
+  }
+
+  isDownloading = true;
+  const progressBox = document.getElementById('progressBox');
+  progressBox?.classList.remove('hidden');
+  resetProgress();
+  try {
+    const fileRef = { fileName, fileSize: 0, mimeType, message: rawMsg, hasMedia: true };
+    const { blob, fileInfo } = await downloader.downloadFile(fileRef);
+    downloader.saveBlobAs(blob, fileInfo.fileName);
+    setTimeout(() => { progressBox?.classList.add('hidden'); resetProgress(); }, 2000);
+  } catch (err) {
+    addLog('error', `Download failed: ${err.message}`);
+    progressBox?.classList.add('hidden');
+    resetProgress();
+  } finally {
+    isDownloading = false;
+  }
 };
 
 function closeReplyModal() {
