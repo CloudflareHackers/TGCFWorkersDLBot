@@ -41,8 +41,9 @@ export async function onRequest(context) {
   const upgradeHeader = request.headers.get('Upgrade');
   if (upgradeHeader && upgradeHeader.toLowerCase() === 'websocket') {
     try {
-      // Create upstream fetch with WebSocket upgrade
-      const upstreamResp = await fetch(`https://${targetHost}/${remainingPath}`, {
+      // Create upstream WebSocket connection via fetch
+      // CF Workers support wss:// in fetch() for WebSocket upgrade
+      const upstreamResp = await fetch(`wss://${targetHost}/${remainingPath}`, {
         headers: {
           'Upgrade': 'websocket',
         },
