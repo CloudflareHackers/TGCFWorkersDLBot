@@ -210,10 +210,11 @@ function renderApp(hasSavedCreds) {
 // ===== Restore from IndexedDB =====
 async function restoreFromDB() {
   try {
-    // Restore conversations (grouped by sender)
+    // Restore conversations (grouped by sender) — all of them
     const convos = await getAllConversations();
+    addLog('dim', `Found ${convos.length} conversations in DB`);
     for (const convo of convos) {
-      renderConversationItem(convo);
+      renderConversationItem(convo, true); // true = append (for restore order)
     }
     
     // Restore files (all, no limit)
@@ -569,7 +570,7 @@ let openChatSenderId = null; // Currently open chat in modal
  * Render or update a conversation item in the list.
  * Only shows the latest message per sender.
  */
-function renderConversationItem(convo) {
+function renderConversationItem(convo, useAppend = false) {
   const list = document.getElementById('messagesList');
   if (!list) return;
   if (list.querySelector('.text-dim')) list.innerHTML = '';
@@ -609,7 +610,11 @@ function renderConversationItem(convo) {
 
   // Click to open full chat
   item.addEventListener('click', () => openChatModal(convo));
-  list.prepend(item);
+  if (useAppend) {
+    list.appendChild(item);
+  } else {
+    list.prepend(item);
+  }
 }
 
 /**
