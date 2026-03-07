@@ -398,7 +398,9 @@ function renderDialogs(dialogs) {
     const icon = d.isChannel ? '📢' : d.isGroup ? '👥' : '👤';
     const time = d.date ? d.date.toLocaleTimeString() : '';
     const preview = d.lastMessage.length > 80 ? d.lastMessage.slice(0, 80) + '...' : (d.lastMessage || '[No messages]');
-    const unread = d.unreadCount > 0 ? `<span style="background: var(--primary); color: white; border-radius: 10px; padding: 1px 6px; font-size: 0.7rem; margin-left: 4px;">${d.unreadCount}</span>` : '';
+    const hasUnread = d.unreadCount > 0;
+    const unread = hasUnread ? `<span style="background: var(--primary); color: white; border-radius: 10px; padding: 1px 6px; font-size: 0.7rem; margin-left: 4px;">${d.unreadCount}</span>` : '';
+    if (!hasUnread) item.style.opacity = '0.6';
     item.innerHTML = `
       <div class="msg-sender">
         <span style="font-size: 1.1rem;">${icon}</span>
@@ -453,7 +455,11 @@ async function openChat(dialog) {
   document.getElementById('userMessagesCard')?.classList.remove('hidden');
   document.getElementById('chatTitle').textContent = dialog.title;
   document.getElementById('messageList').innerHTML = '<p class="text-dim">Loading messages...</p>';
-  document.getElementById('userMsgInput')?.focus();
+  // Check if we can write in this chat
+  const canWrite = !dialog.isChannel || (dialog.entity?.adminRights || dialog.entity?.creator);
+  const inputRow = document.querySelector('#userMessagesCard .reply-input-row');
+  if (inputRow) inputRow.style.display = canWrite ? '' : 'none';
+  if (canWrite) document.getElementById('userMsgInput')?.focus();
 
   try {
     const messages = await userClient.getMessages(currentEntity, 40);
