@@ -353,12 +353,15 @@ export class TGDownloader {
     const actualConnections = Math.min(connections, totalChunks);
     const chunksPerWorker = Math.ceil(totalChunks / actualConnections);
 
-    this.onLog('dim', `${totalChunks} chunks (${this._formatSize(MAX_CHUNK_SIZE)} each), ${actualConnections} workers`);
+    // Cap unique DC senders to avoid overwhelming the connection.
+    // Workers > maxSenders will share senders round-robin.
+    const maxSenders = Math.min(actualConnections, 8);
+    this.onLog('dim', `${totalChunks} chunks (${this._formatSize(MAX_CHUNK_SIZE)} each), ${actualConnections} workers, ${maxSenders} DC connections`);
 
     // Get senders (each creates a separate connection to the DC)
     const senders = [];
     try {
-      for (let i = 0; i < actualConnections; i++) {
+      for (let i = 0; i < maxSenders; i++) {
         const sender = await this.client.getSender(dcId);
         senders.push(sender);
       }
@@ -432,6 +435,8 @@ export class TGDownloader {
   async _downloadRange(fileLocation, sender, startOffset, endOffset, workerIdx, workerProgress, startTime, totalFileSize, chunkSize) {
     const chunks = [];
     let currentOffset = startOffset;
+    let retries = 0;
+    const MAX_RETRIES = 3;
 
     while (currentOffset < endOffset) {
       // Limit MUST be a multiple of 4096 and max 1MB for MTProto
@@ -446,6 +451,7 @@ export class TGDownloader {
       let result;
       try {
         result = await this.client.invokeWithSender(request, sender);
+        retries = 0; // Reset retries on success
       } catch (e) {
         if (e.message && e.message.includes('FILE_MIGRATE_')) {
           // File is on another DC
@@ -457,6 +463,19 @@ export class TGDownloader {
           } else {
             throw e;
           }
+        } else if (retries < MAX_RETRIES) {
+          // Connection error — wait and retry with a fresh sender
+          retries++;
+          this.onLog('warn', `Worker ${workerIdx + 1}: error at offset ${currentOffset}, retry ${retries}/${MAX_RETRIES}...`);
+          await new Promise(r => setTimeout(r, 1000 * retries)); // Exponential backoff
+          try {
+            sender = await this.client.getSender(undefined); // Get a fresh sender
+          } catch {
+            // If getSender fails, wait more and try once more
+            await new Promise(r => setTimeout(r, 3000));
+            sender = await this.client.getSender(undefined);
+          }
+          continue; // Retry the same offset
         } else {
           throw e;
         }
