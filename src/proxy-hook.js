@@ -15,6 +15,23 @@ const _OriginalWebSocket = window.WebSocket;
 
 const TELEGRAM_WS_PATTERN = /^wss?:\/\/([a-z0-9\-]+\.(?:web\.)?telegram\.org)(\/.*)?$/i;
 
+// Log to the app's visible log panel (if it exists)
+function proxyLog(type, msg) {
+  console.log(`[Proxy] ${msg}`);
+  // Try to append to the visible log container
+  try {
+    const container = document.getElementById('logContainer') || document.getElementById('userLogContainer');
+    if (container) {
+      const time = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `[${time}] ${msg}`;
+      container.appendChild(entry);
+      container.scrollTop = container.scrollHeight;
+    }
+  } catch {}
+}
+
 class ProxiedWebSocket extends _OriginalWebSocket {
   constructor(url, protocols) {
     // Check if proxy is enabled (read directly from localStorage to avoid circular imports)
@@ -34,10 +51,16 @@ class ProxiedWebSocket extends _OriginalWebSocket {
         const path = match[2] || ''; // e.g. /apiws
         // Rewrite to proxy URL on same origin
         const proxyUrl = `wss://${window.location.host}/api/${host}${path}`;
-        console.log(`[Proxy] Rewriting WebSocket: ${url} → ${proxyUrl}`);
+        proxyLog('info', `🌐 Proxy: ${host}${path} → /api/${host}${path}`);
         super(proxyUrl, protocols);
         return;
       }
+    }
+
+    // Log direct connections to Telegram (so user can see proxy is NOT active)
+    if (typeof url === 'string' && TELEGRAM_WS_PATTERN.test(url)) {
+      const match = url.match(TELEGRAM_WS_PATTERN);
+      proxyLog('dim', `🔌 Direct: ${match ? match[1] : url} (proxy disabled)`);
     }
 
     // Not a Telegram URL or proxy disabled — pass through
