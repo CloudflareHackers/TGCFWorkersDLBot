@@ -828,12 +828,13 @@ button:disabled {
 }
 
 .media-photo-thumb {
-  max-width: 280px;
-  max-height: 280px;
+  width: 100%;
+  max-height: 400px;
   border-radius: 8px;
   cursor: zoom-in;
   display: block;
   transition: opacity 0.2s;
+  object-fit: contain;
 }
 
 .media-photo-thumb:hover {
@@ -1021,8 +1022,8 @@ button:disabled {
   }
 
   .media-photo-thumb {
-    max-width: 200px;
-    max-height: 200px;
+    width: 100%;
+    max-height: 300px;
   }
 
   .media-video-actions {
