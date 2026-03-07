@@ -20,6 +20,12 @@ let isLoadingOlder = false;
 let _currentPage = 'main'; // 'main' | 'settings'
 let _activeDownloadId = 0; // Tracks current download, increments to cancel old ones
 
+// ===== Download Queue =====
+const _downloadQueue = [];
+let _queueIdCounter = 0;
+let _queueProcessing = false;
+let _currentQueueItemId = null; // ID of item currently downloading
+
 const thumbCache = new Map();
 const rawMessageCache = new Map();
 
@@ -138,6 +144,15 @@ export function renderUserMode(container, addLog, switchMode) {
           <input type="text" id="userMsgInput" placeholder="Type a message..." />
           <button class="btn-primary btn-sm" id="btnUserSend">Send</button>
         </div>
+      </div>
+
+      <!-- Download Queue -->
+      <div class="card hidden" id="downloadQueueCard">
+        <div class="flex-between mb-8">
+          <h2><span class="icon">📥</span> Download Queue <span class="text-dim" id="queueCount" style="font-size:0.8rem; font-weight:400;"></span></h2>
+          <button class="btn-outline btn-sm" id="btnClearQueue">🗑️ Clear</button>
+        </div>
+        <div id="downloadQueueList"></div>
       </div>
 
       <!-- Log -->
@@ -489,6 +504,9 @@ function bindUserEvents(addLog, switchMode) {
       }
     });
   });
+
+  // Download Queue
+  document.getElementById('btnClearQueue')?.addEventListener('click', () => clearDownloadQueue());
 
   // User Settings
   document.getElementById('btnSaveUserSettings')?.addEventListener('click', handleSaveUserSettings);
@@ -1063,64 +1081,326 @@ window._playVideo = async (msgId, mimeType) => {
   const rawMsg = rawMessageCache.get(msgId); if (!rawMsg) return;
   const pc = document.getElementById(`videoPlayer_${msgId}`); if (!pc) return;
   if (pc.querySelector('video, audio')) { pc.classList.toggle('hidden'); return; }
-  pc.classList.remove('hidden');
-  pc.innerHTML = '<div class="text-dim" style="padding:8px; font-size:0.82rem;">⏳ Downloading...</div>';
-  document.getElementById('userProgressBox')?.classList.remove('hidden');
-  try {
-    const isAudio = mimeType.startsWith('audio/');
-    const blobUrl = await userClient.downloadMediaForPlayback(rawMsg, mimeType);
-    if (blobUrl) pc.innerHTML = isAudio ? `<audio controls autoplay style="width:100%; margin-top:4px;" src="${blobUrl}"></audio>` : `<video controls autoplay playsinline style="width:100%; max-height:300px; border-radius:8px; margin-top:4px;" src="${blobUrl}"></video>`;
-    else pc.innerHTML = '<div class="text-dim" style="padding:8px;">Failed.</div>';
-  } catch (e) { pc.innerHTML = '<div class="text-dim" style="padding:8px;">Failed.</div>'; userLog('error', `Play failed: ${e.message}`); }
-  setTimeout(() => document.getElementById('userProgressBox')?.classList.add('hidden'), 1000);
+  // Enqueue a playback download
+  enqueueDownload({ msgId, mode: 'play', mimeType, playerContainerId: `videoPlayer_${msgId}` });
 };
+
+window._downloadUserMedia = (msgId) => {
+  if (!userClient?.connected || !currentEntity) return;
+  enqueueDownload({ msgId, mode: 'save' });
+};
+
+// ===== Download Queue System =====
+
+/**
+ * Resolve raw message and file metadata for a given msgId.
+ * Returns { rawMsg, fileName, mimeType, fileSize, icon } or null.
+ */
+async function resolveMediaInfo(msgId) {
+  let rawMsg = rawMessageCache.get(msgId);
+  if (!rawMsg) {
+    const msgs = await userClient.getMessages(currentEntity, 1, msgId + 1);
+    const m = msgs.find(m => m.id === msgId);
+    if (!m?.message) return null;
+    rawMsg = m.message;
+    rawMessageCache.set(msgId, rawMsg);
+  }
+  const media = rawMsg.media;
+  let fileName = `file_${msgId}`;
+  let mimeType = 'application/octet-stream';
+  let fileSize = 0;
+  let icon = '📄';
+
+  if (media?.document) {
+    fileName = 'file';
+    mimeType = media.document.mimeType || 'application/octet-stream';
+    fileSize = Number(media.document.size || 0);
+    for (const a of media.document.attributes || []) {
+      if (a.className === 'DocumentAttributeFilename') fileName = a.fileName;
+      if (a.className === 'DocumentAttributeVideo') icon = a.roundMessage ? '⏺️' : '🎬';
+      if (a.className === 'DocumentAttributeAudio') icon = a.voice ? '🎤' : '🎵';
+    }
+    if (icon === '📄') icon = getFileIcon(mimeType, fileName);
+  } else if (media?.photo) {
+    fileName = `photo_${msgId}.jpg`;
+    mimeType = 'image/jpeg';
+    icon = '📷';
+    const sizes = media.photo?.sizes || [];
+    const largest = sizes[sizes.length - 1];
+    fileSize = largest?.size ? Number(largest.size) : 0;
+  }
+  return { rawMsg, fileName, mimeType, fileSize, icon };
+}
+
+/**
+ * Enqueue a download item.
+ * @param {object} opts - { msgId, mode: 'save'|'play', mimeType?, playerContainerId? }
+ */
+function enqueueDownload(opts) {
+  const id = ++_queueIdCounter;
+  const item = {
+    id,
+    msgId: opts.msgId,
+    mode: opts.mode || 'save', // 'save' or 'play'
+    mimeType: opts.mimeType || null,
+    playerContainerId: opts.playerContainerId || null,
+    status: 'queued', // queued | downloading | done | error | cancelled
+    percent: 0,
+    speed: 0,
+    fileName: `#${opts.msgId}`,
+    fileSize: 0,
+    icon: '📄',
+    error: null,
+  };
+  _downloadQueue.push(item);
+  userLog('info', `📥 Queued download #${opts.msgId}`);
+  renderQueueUI();
+  processQueue(); // Kick off processing (no-op if already running)
+}
+
+/**
+ * Remove a single item from the queue (cancel if active).
+ */
+function removeQueueItem(itemId) {
+  const idx = _downloadQueue.findIndex(i => i.id === itemId);
+  if (idx === -1) return;
+  const item = _downloadQueue[idx];
+  if (item.status === 'downloading') {
+    // Cancel the active download
+    item.status = 'cancelled';
+    _activeDownloadId++;
+    userLog('warn', `⚠️ Cancelled: ${item.fileName}`);
+  }
+  _downloadQueue.splice(idx, 1);
+  renderQueueUI();
+}
+
+/**
+ * Clear completed/error/cancelled items. Cancel active download.
+ */
+function clearDownloadQueue() {
+  // Cancel active download if any
+  if (_currentQueueItemId !== null) {
+    _activeDownloadId++;
+    const active = _downloadQueue.find(i => i.id === _currentQueueItemId);
+    if (active) active.status = 'cancelled';
+  }
+  _downloadQueue.length = 0;
+  _queueProcessing = false;
+  _currentQueueItemId = null;
+  renderQueueUI();
+  userLog('info', '🗑️ Download queue cleared.');
+}
+
+/**
+ * Process the queue one at a time.
+ */
+async function processQueue() {
+  if (_queueProcessing) return;
+  _queueProcessing = true;
+
+  while (true) {
+    const next = _downloadQueue.find(i => i.status === 'queued');
+    if (!next) break;
+    if (!userClient?.connected) {
+      userLog('error', 'Not connected. Queue paused.');
+      break;
+    }
+
+    next.status = 'downloading';
+    _currentQueueItemId = next.id;
+    _activeDownloadId++;
+    const myDownloadId = _activeDownloadId;
+    renderQueueUI();
+
+    try {
+      // Resolve media info
+      const info = await resolveMediaInfo(next.msgId);
+      if (!info) { next.status = 'error'; next.error = 'Not found'; renderQueueUI(); continue; }
+      next.fileName = info.fileName;
+      next.fileSize = info.fileSize;
+      next.icon = info.icon;
+      next.mimeType = next.mimeType || info.mimeType;
+      renderQueueUI();
+
+      if (next.mode === 'play') {
+        await processPlayItem(next, info, myDownloadId);
+      } else {
+        await processSaveItem(next, info, myDownloadId);
+      }
+
+      // Check if cancelled mid-download
+      if (next.status === 'cancelled') continue;
+      next.status = 'done';
+      next.percent = 100;
+    } catch (e) {
+      if (next.status !== 'cancelled') {
+        next.status = 'error';
+        next.error = e.message;
+        userLog('error', `Download failed: ${e.message}`);
+      }
+    }
+    _currentQueueItemId = null;
+    renderQueueUI();
+  }
+
+  _queueProcessing = false;
+  _currentQueueItemId = null;
+}
+
+/**
+ * Process a 'save' download item (download to disk).
+ */
+async function processSaveItem(item, info, myDownloadId) {
+  const startTime = Date.now();
+  let lastUpdate = 0;
+
+  const buffer = await userClient.client.downloadMedia(info.rawMsg, {
+    progressCallback: (downloaded, total) => {
+      if (_activeDownloadId !== myDownloadId) return; // cancelled
+      const now = Date.now();
+      if (now - lastUpdate < 200 && downloaded < total) return;
+      lastUpdate = now;
+      const elapsed = (now - startTime) / 1000;
+      const speed = Number(downloaded) / (elapsed || 1);
+      const percent = total > 0 ? (Number(downloaded) / Number(total)) * 100 : 0;
+      item.percent = percent;
+      item.speed = speed;
+      renderQueueItemProgress(item);
+    },
+  });
+
+  if (_activeDownloadId !== myDownloadId) { item.status = 'cancelled'; return; }
+  if (!buffer) throw new Error('Download returned empty.');
+
+  const blob = new Blob([buffer], { type: info.mimeType || 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = info.fileName || 'download';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  userLog('success', `💾 Saved: ${info.fileName} (${elapsed}s)`);
+}
+
+/**
+ * Process a 'play' download item (stream to player).
+ */
+async function processPlayItem(item, info, myDownloadId) {
+  const pc = document.getElementById(item.playerContainerId);
+  if (pc) { pc.classList.remove('hidden'); pc.innerHTML = '<div class="text-dim" style="padding:8px; font-size:0.82rem;">⏳ Downloading for playback...</div>'; }
+
+  const startTime = Date.now();
+  let lastUpdate = 0;
+  const mimeType = item.mimeType || info.mimeType || 'video/mp4';
+
+  const buffer = await userClient.client.downloadMedia(info.rawMsg, {
+    progressCallback: (downloaded, total) => {
+      if (_activeDownloadId !== myDownloadId) return;
+      const now = Date.now();
+      if (now - lastUpdate < 200 && downloaded < total) return;
+      lastUpdate = now;
+      const elapsed = (now - startTime) / 1000;
+      const speed = Number(downloaded) / (elapsed || 1);
+      const percent = total > 0 ? (Number(downloaded) / Number(total)) * 100 : 0;
+      item.percent = percent;
+      item.speed = speed;
+      renderQueueItemProgress(item);
+    },
+  });
+
+  if (_activeDownloadId !== myDownloadId) { item.status = 'cancelled'; if (pc) pc.innerHTML = ''; return; }
+  if (!buffer || buffer.length === 0) { if (pc) pc.innerHTML = '<div class="text-dim" style="padding:8px;">Failed.</div>'; throw new Error('Empty buffer'); }
+
+  const blob = new Blob([buffer], { type: mimeType });
+  const blobUrl = URL.createObjectURL(blob);
+  const isAudio = mimeType.startsWith('audio/');
+  if (pc) pc.innerHTML = isAudio
+    ? `<audio controls autoplay style="width:100%; margin-top:4px;" src="${blobUrl}"></audio>`
+    : `<video controls autoplay playsinline style="width:100%; max-height:300px; border-radius:8px; margin-top:4px;" src="${blobUrl}"></video>`;
+}
+
+/**
+ * Render the full queue UI (show/hide card, render list items).
+ */
+function renderQueueUI() {
+  const card = document.getElementById('downloadQueueCard');
+  const listEl = document.getElementById('downloadQueueList');
+  const countEl = document.getElementById('queueCount');
+  if (!card || !listEl) return;
+
+  if (_downloadQueue.length === 0) {
+    card.classList.add('hidden');
+    listEl.innerHTML = '';
+    return;
+  }
+
+  card.classList.remove('hidden');
+  const pending = _downloadQueue.filter(i => i.status === 'queued').length;
+  const active = _downloadQueue.filter(i => i.status === 'downloading').length;
+  if (countEl) countEl.textContent = `(${active ? '1 active' : ''}${active && pending ? ', ' : ''}${pending ? `${pending} queued` : ''}${!active && !pending ? `${_downloadQueue.length} done` : ''})`;
+
+  listEl.innerHTML = _downloadQueue.map(item => {
+    const statusIcon = item.status === 'downloading' ? '⏳' : item.status === 'done' ? '✅' : item.status === 'error' ? '❌' : item.status === 'cancelled' ? '🚫' : '⏸️';
+    const statusClass = item.status === 'downloading' ? 'active' : item.status === 'done' ? 'done' : item.status === 'error' ? 'error' : item.status === 'cancelled' ? 'cancelled' : 'queued';
+    const sizeStr = item.fileSize ? formatFileSize(item.fileSize) : '';
+    const speedStr = item.status === 'downloading' && item.speed > 0 ? `${formatFileSize(item.speed)}/s` : '';
+    const modeLabel = item.mode === 'play' ? '▶' : '📥';
+    const showProgress = item.status === 'downloading';
+    const showRemove = item.status !== 'done';
+
+    return `<div class="queue-item queue-item-${statusClass}" data-queue-id="${item.id}">
+      <div class="queue-item-header">
+        <span class="queue-item-icon">${item.icon}</span>
+        <div class="queue-item-info">
+          <span class="queue-item-name">${escHtml(item.fileName)} <span class="queue-item-mode">${modeLabel}</span></span>
+          <span class="queue-item-meta">${[sizeStr, speedStr].filter(Boolean).join(' • ')} ${statusIcon} ${item.status}${item.error ? ': ' + escHtml(item.error) : ''}</span>
+        </div>
+        ${showRemove ? `<button class="btn-outline btn-sm queue-item-remove" onclick="window._removeQueueItem(${item.id})" style="padding:2px 8px; font-size:0.72rem; width:auto;">✕</button>` : ''}
+      </div>
+      ${showProgress ? `<div class="queue-item-progress"><div class="progress-bar-bg" style="height:4px;"><div class="progress-bar-fill" id="queueBar_${item.id}" style="width:${item.percent.toFixed(1)}%;"></div></div></div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+/**
+ * Update only the progress bar and meta for an active item (fast path, no full re-render).
+ */
+function renderQueueItemProgress(item) {
+  const bar = document.getElementById(`queueBar_${item.id}`);
+  if (bar) bar.style.width = `${item.percent.toFixed(1)}%`;
+  // Update meta text
+  const el = document.querySelector(`.queue-item[data-queue-id="${item.id}"] .queue-item-meta`);
+  if (el) {
+    const sizeStr = item.fileSize ? formatFileSize(item.fileSize) : '';
+    const speedStr = item.speed > 0 ? `${formatFileSize(item.speed)}/s` : '';
+    el.textContent = `${[sizeStr, speedStr].filter(Boolean).join(' • ')} ⏳ downloading ${item.percent.toFixed(0)}%`;
+  }
+  // Also mirror to the old progress box for backward compat
+  updateUserProgress({ percent: item.percent, speed: item.speed });
+}
 
 /** Cancel current download by incrementing the download ID */
 function cancelUserDownload() {
-  _activeDownloadId++;
+  if (_currentQueueItemId !== null) {
+    removeQueueItem(_currentQueueItemId);
+  } else {
+    _activeDownloadId++;
+  }
   document.getElementById('userProgressBox')?.classList.add('hidden');
   const bar = document.getElementById('userProgressBar');
   if (bar) bar.style.width = '0%';
-  userLog('warn', '⚠️ Download cancelled.');
 }
 
 // Bind cancel button
 document.getElementById('btnCancelDownload')?.addEventListener('click', cancelUserDownload);
 
-window._downloadUserMedia = async (msgId) => {
-  if (!userClient?.connected || !currentEntity) return;
-
-  // Cancel any previous download
-  _activeDownloadId++;
-  const myDownloadId = _activeDownloadId;
-
-  userLog('info', `📥 Downloading #${msgId}...`);
-  let rawMsg = rawMessageCache.get(msgId);
-  if (!rawMsg) { const msgs = await userClient.getMessages(currentEntity, 1, msgId + 1); const m = msgs.find(m => m.id === msgId); if (!m?.message) { userLog('error', 'Not found.'); return; } rawMsg = m.message; }
-  const media = rawMsg.media; let fileName, mimeType;
-  if (media?.document) { fileName = 'file'; mimeType = media.document.mimeType || 'application/octet-stream'; for (const a of media.document.attributes || []) { if (a.className === 'DocumentAttributeFilename') fileName = a.fileName; } }
-  else if (media?.photo) { fileName = `photo_${msgId}.jpg`; mimeType = 'image/jpeg'; }
-  else { fileName = `file_${msgId}`; mimeType = 'application/octet-stream'; }
-
-  // Show progress, reset bar
-  const progressBox = document.getElementById('userProgressBox');
-  const bar = document.getElementById('userProgressBar');
-  if (bar) bar.style.width = '0%';
-  progressBox?.classList.remove('hidden');
-
-  try {
-    await userClient.downloadAndSave(rawMsg, fileName, mimeType);
-    // Only hide if this download is still the active one
-    if (_activeDownloadId === myDownloadId) {
-      setTimeout(() => progressBox?.classList.add('hidden'), 2000);
-    }
-  } catch (e) {
-    if (_activeDownloadId === myDownloadId) {
-      userLog('error', `Download failed: ${e.message}`);
-      progressBox?.classList.add('hidden');
-    }
-  }
-};
+// Global remove handler for queue items
+window._removeQueueItem = (itemId) => removeQueueItem(itemId);
 
 // ===== Reply & Send =====
 
