@@ -459,9 +459,19 @@ async function openChat(dialog) {
     const messages = await userClient.getMessages(currentEntity, 40);
     const list = document.getElementById('messageList');
     list.innerHTML = '';
+    // Build a map of id → text for reply previews
+    const msgMap = {};
+    for (const msg of messages) {
+      msgMap[msg.id] = msg.text || (msg.media ? '[Media]' : '');
+    }
+
     // Messages come newest-first, reverse for display
     let maxId = 0;
     for (const msg of messages.reverse()) {
+      // Resolve reply preview text
+      if (msg.replyToMsgId && msgMap[msg.replyToMsgId]) {
+        msg.replyToText = msgMap[msg.replyToMsgId];
+      }
       appendUserMessage(msg);
       if (msg.id > maxId) maxId = msg.id;
     }
@@ -520,10 +530,8 @@ function prependUserMessage(msg) {
   const div = document.createElement('div');
   const time = smartDate(msg.date);
   const isOut = msg.out;
-  let replyBar = '';
-  if (msg.replyToMsgId) {
-    replyBar = `<div style="border-left:3px solid var(--primary); padding:2px 8px; margin-bottom:4px; font-size:0.75rem; color:var(--text-dim);">↩ Reply to #${msg.replyToMsgId}</div>`;
-  }
+  const replyBar = renderReplyBar(msg);
+  div.id = `msg_${msg.id}`;
   if (isOut) {
     div.className = 'reply-sent';
     div.innerHTML = `${replyBar}${msg.text ? `<div class="reply-sent-text">${escHtml(msg.text)}</div>` : ''}${msg.media ? renderMediaBadge(msg) : ''}<div class="reply-sent-time">${time}</div>`;
@@ -533,6 +541,15 @@ function prependUserMessage(msg) {
     div.addEventListener('click', () => setUserReplyTo(msg.id, msg.text || '[Media]'));
   }
   list.prepend(div);
+}
+
+function renderReplyBar(msg) {
+  if (!msg.replyToMsgId) return '';
+  const preview = msg.replyToText || `Message #${msg.replyToMsgId}`;
+  const short = preview.length > 60 ? preview.substring(0, 60) + '...' : preview;
+  return `<div class="reply-quote-bar" style="cursor:pointer; margin-bottom:4px;" onclick="document.getElementById('msg_${msg.replyToMsgId}')?.scrollIntoView({behavior:'smooth', block:'center'}); document.getElementById('msg_${msg.replyToMsgId}')?.classList.add('highlight-msg'); setTimeout(()=>document.getElementById('msg_${msg.replyToMsgId}')?.classList.remove('highlight-msg'),1500);">
+    <span class="reply-quote-text">↩ ${escHtml(short)}</span>
+  </div>`;
 }
 
 function smartDate(date) {
@@ -555,14 +572,10 @@ function appendUserMessage(msg) {
   if (ph) ph.remove();
 
   const div = document.createElement('div');
+  div.id = `msg_${msg.id}`;
   const time = smartDate(msg.date);
   const isOut = msg.out;
-
-  // Reply-to context bar
-  let replyBar = '';
-  if (msg.replyToMsgId) {
-    replyBar = `<div style="border-left:3px solid var(--primary); padding:2px 8px; margin-bottom:4px; font-size:0.75rem; color:var(--text-dim);">↩ Reply to #${msg.replyToMsgId}</div>`;
-  }
+  const replyBar = renderReplyBar(msg);
 
   if (isOut) {
     div.className = 'reply-sent';

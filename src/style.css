@@ -729,6 +729,16 @@ button:disabled {
   border-radius: 50%;
 }
 
+/* ===== Message highlight animation (click reply-to) ===== */
+.highlight-msg {
+  animation: highlightPulse 1.5s ease;
+}
+
+@keyframes highlightPulse {
+  0% { background: rgba(0, 136, 204, 0.3); }
+  100% { background: transparent; }
+}
+
 /* ===== Filter Buttons ===== */
 .chat-filter-btn.active {
   background: var(--primary) !important;
