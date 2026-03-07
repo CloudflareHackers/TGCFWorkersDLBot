@@ -922,6 +922,18 @@ async function addIncomingMessage(msgInfo) {
     msgInfo.thumbnailUrl = thumbnailUrl;
   }
 
+  // Extract reply-to context from raw GramJS message
+  const rawMsg = msgInfo.message;
+  if (rawMsg?.replyTo?.replyToMsgId) {
+    msgInfo.replyToMsgId = rawMsg.replyTo.replyToMsgId;
+    // Try to find the original message text in current conversation
+    if (currentChatConvo) {
+      const freshConvo = await getConversation(currentChatConvo.senderId);
+      const origMsg = freshConvo?.messages?.find(m => m.id === rawMsg.replyTo.replyToMsgId);
+      if (origMsg) msgInfo.replyToText = origMsg.text || '[Media]';
+    }
+  }
+
   // Save to conversation in IndexedDB (with thumbnail if available)
   const convoData = { ...msgInfo };
   if (thumbnailUrl) convoData.thumbnailUrl = thumbnailUrl;
