@@ -321,7 +321,6 @@ function onUserLoggedIn() {
   });
   // Listen for new messages
   userClient.startListening((msg) => {
-    if (!currentEntity || !currentDialogId) return;
     // Build all possible ID forms for matching
     const peer = msg.message?.peerId;
     const possibleIds = [];
@@ -338,7 +337,18 @@ function onUserLoggedIn() {
     }
     if (msg.senderId) possibleIds.push(msg.senderId.toString());
 
-    if (possibleIds.includes(currentDialogId)) {
+    // Update chat list preview for this dialog
+    const matchedDialog = dialogsCache.find(d => possibleIds.includes(d.id));
+    if (matchedDialog) {
+      matchedDialog.lastMessage = msg.text || (msg.media ? '[Media]' : '');
+      matchedDialog.date = msg.date || new Date();
+      // Re-render chat list with current filter
+      const activeFilter = document.querySelector('.chat-filter-btn.active')?.dataset?.filter || 'all';
+      filterDialogsByType(activeFilter);
+    }
+
+    // Append to open chat if matching
+    if (currentEntity && currentDialogId && possibleIds.includes(currentDialogId)) {
       appendUserMessage(msg);
       if (msg.id) userClient.markAsRead(currentEntity, msg.id).catch(() => {});
     }
