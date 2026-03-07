@@ -436,7 +436,6 @@ async function handleRestoredDownload(itemEl, file) {
   }
 
   const btn = itemEl.querySelector('button');
-  const connections = parseInt(document.getElementById('connections')?.value) || 4;
   btn.disabled = true;
   btn.innerHTML = '⏳ ...';
   isDownloading = true;
@@ -445,7 +444,7 @@ async function handleRestoredDownload(itemEl, file) {
   resetProgress();
 
   try {
-    const { blob, fileInfo } = await downloader.downloadFile(fileRef, connections);
+    const { blob, fileInfo } = await downloader.downloadFile(fileRef);
     downloader.saveBlobAs(blob, fileInfo.fileName);
 
     // Mark as downloaded in IndexedDB
@@ -730,7 +729,7 @@ async function handleFetchInfo() {
 // ===== Step 2: Download =====
 async function handleDownload() {
   if (!isConnected || !downloader || isDownloading || !currentFileRef) return;
-  const connections = parseInt(document.getElementById('connections').value) || 4;
+  // Use settings for worker count (not the legacy dropdown)
   const btn = document.getElementById('btnDownload');
   const progressBox = document.getElementById('progressBox');
   btn.disabled = true;
@@ -739,7 +738,7 @@ async function handleDownload() {
   progressBox.classList.remove('hidden');
   resetProgress();
   try {
-    const { blob, fileInfo } = await downloader.downloadFile(currentFileRef, connections);
+    const { blob, fileInfo } = await downloader.downloadFile(currentFileRef);
     downloader.saveBlobAs(blob, fileInfo.fileName);
     addToHistory(fileInfo);
     btn.innerHTML = '✅ Done!';
@@ -809,7 +808,6 @@ async function handleIncomingDownload(itemEl, fileRef) {
     return;
   }
   const btn = itemEl.querySelector('button');
-  const connections = parseInt(document.getElementById('connections')?.value) || 4;
   btn.disabled = true;
   btn.innerHTML = '⏳ ...';
   isDownloading = true;
@@ -817,7 +815,7 @@ async function handleIncomingDownload(itemEl, fileRef) {
   progressBox.classList.remove('hidden');
   resetProgress();
   try {
-    const { blob, fileInfo } = await downloader.downloadFile(fileRef, connections);
+    const { blob, fileInfo } = await downloader.downloadFile(fileRef);
     downloader.saveBlobAs(blob, fileInfo.fileName);
     addToHistory(fileInfo);
     btn.innerHTML = '✅ Done';
