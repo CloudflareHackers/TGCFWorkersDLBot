@@ -7,14 +7,3 @@ compatibility_date = "2025-03-01"
 
 [site]
 bucket = "./dist"
-
-# Bind to the TG-WS-API Worker's Durable Object for WebSocket proxying
-# This allows /api/ routes to use Durable Objects for WS proxy
-[[services]]
-binding = "WS_API"
-service = "tg-ws-api"
-
-[durable_objects]
-bindings = [
-  { name = "WS_PROXY", class_name = "WebSocketProxy", service = "tg-ws-api" }
-]

@@ -1288,13 +1288,19 @@ function handleSaveSettings() {
   const workers = parseInt(document.getElementById('settingsWorkers')?.value) || 4;
   const chunkSize = parseInt(document.getElementById('settingsChunkSize')?.value) || 524288;
   const proxyEnabled = !!document.getElementById('settingsProxy')?.checked;
-  const proxyDomain = (document.getElementById('settingsProxyDomain')?.value || '').trim();
+  let proxyDomain = (document.getElementById('settingsProxyDomain')?.value || '').trim();
+  // Auto-clean: strip protocol and trailing slashes so user can paste full URL
+  proxyDomain = proxyDomain.replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
 
   const s = getSettings();
   s.parallelWorkers = Math.min(Math.max(1, workers), 8);
   s.chunkSize = chunkSize;
   s.proxyEnabled = proxyEnabled;
   s.proxyDomain = proxyDomain;
+
+  // Update the input with cleaned value
+  const domainEl = document.getElementById('settingsProxyDomain');
+  if (domainEl) domainEl.value = proxyDomain;
   saveSettings(s);
 
   const status = document.getElementById('settingsSaveStatus');

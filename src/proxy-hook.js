@@ -51,15 +51,30 @@ class ProxiedWebSocket extends _OriginalWebSocket {
         const host = match[1]; // e.g. venus-1.web.telegram.org
         const path = match[2] || ''; // e.g. /apiws
 
-        // Get proxy domain from settings — default is the deployed worker
-        let proxyDomain = 'tg-ws-api.hashhackersapi.workers.dev';
+        // Get proxy domain from settings
+        let proxyDomain = '';
         try {
           const raw = localStorage.getItem('tgcf_settings');
           if (raw) {
             const s = JSON.parse(raw);
-            proxyDomain = s.proxyDomain || proxyDomain;
+            proxyDomain = (s.proxyDomain || '').trim();
           }
         } catch {}
+
+        // Clean the domain: strip https://, http://, wss://, ws://, trailing slashes
+        if (proxyDomain) {
+          proxyDomain = proxyDomain
+            .replace(/^https?:\/\//i, '')
+            .replace(/^wss?:\/\//i, '')
+            .replace(/\/+$/, '');
+        }
+
+        if (!proxyDomain) {
+          // No proxy domain configured — can't proxy, fall through to direct
+          proxyLog('warn', `⚠️ Proxy enabled but no worker domain configured. Using direct connection.`);
+          super(url, protocols);
+          return;
+        }
 
         // Route through CF Worker with Durable Objects
         const proxyUrl = `wss://${proxyDomain}/${host}${path}`;
