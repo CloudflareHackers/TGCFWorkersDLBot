@@ -2,7 +2,7 @@
 
 A full-featured Telegram client running entirely in your browser. No server needed — connects directly to Telegram via MTProto WebSocket using [GramJS](https://gram.js.org).
 
-**[Live Demo](https://tgcfworkersdlbot.pages.dev)** • **[Deploy Your Own](#deploy)**
+**[Live Demo](https://tg-file-dl.pages.dev)** • **[Deploy Your Own](#deploy)**
 
 ## ✨ Features
 
