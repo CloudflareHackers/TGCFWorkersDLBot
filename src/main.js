@@ -987,9 +987,18 @@ async function openChatModal(convo) {
   const freshConvo = await getConversation(convo.senderId);
   const messages = freshConvo?.messages || convo.messages || [];
 
-  // Render all messages
+  // Build a lookup map for resolving replyToText from conversation messages
+  const msgTextMap = {};
+  for (const m of messages) {
+    if (m.id) msgTextMap[m.id] = m.text || (m.hasMedia ? '[Media]' : '[Empty]');
+  }
+
+  // Render all messages, resolving replyToText if missing
   conversation.innerHTML = '';
   for (const msg of messages) {
+    if (msg.replyToMsgId && !msg.replyToText && msgTextMap[msg.replyToMsgId]) {
+      msg.replyToText = msgTextMap[msg.replyToMsgId];
+    }
     appendMessageToChatPopup(msg);
   }
 
@@ -1258,7 +1267,7 @@ function handleClearSession() {
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
-  return div.innerHTML;
+  return div.innerHTML.replace(/\n/g, '<br>');
 }
 
 function setConnectionStatus(status) {
