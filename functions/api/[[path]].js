@@ -24,6 +24,7 @@ export async function onRequest(context) {
   }
 
   const remainingPath = pathSegments.slice(1).join('/');
+  const targetUrl = `https://${targetHost}/${remainingPath}`;
 
   // CORS preflight
   if (request.method === 'OPTIONS') {
@@ -36,68 +37,88 @@ export async function onRequest(context) {
     });
   }
 
-  // WebSocket upgrade — use fetch-based approach
+  // WebSocket upgrade
   const upgradeHeader = request.headers.get('Upgrade');
   if (upgradeHeader && upgradeHeader.toLowerCase() === 'websocket') {
-    const targetUrl = `https://${targetHost}/${remainingPath}`;
-
-    // Forward the entire request to Telegram, preserving the Upgrade header
-    // Cloudflare will handle the WebSocket upgrade transparently
     try {
-      const resp = await fetch(targetUrl, {
+      // Create upstream fetch with WebSocket upgrade
+      // Must use https:// (not wss://) with Upgrade: websocket header
+      const upstreamResp = await fetch(targetUrl, {
         headers: {
           'Upgrade': 'websocket',
+          'Connection': 'Upgrade',
           'Host': targetHost,
+          'Origin': `https://${targetHost}`,
         },
       });
 
-      // If fetch returns a WebSocket, create a WebSocketPair to bridge
-      if (resp.webSocket) {
-        const upstream = resp.webSocket;
+      // Check if upstream supports WebSocket
+      if (upstreamResp.webSocket) {
+        // Bridge: create a pair for the client, pipe to upstream
+        const upstream = upstreamResp.webSocket;
         const pair = new WebSocketPair();
-        const [client, server] = Object.values(pair);
+        const [clientWs, serverWs] = Object.values(pair);
 
         upstream.accept();
-        server.accept();
+        serverWs.accept();
 
-        // Bridge messages bidirectionally
-        upstream.addEventListener('message', evt => {
-          try { server.send(evt.data); } catch {}
+        // Bidirectional data pipe
+        upstream.addEventListener('message', e => {
+          try { serverWs.send(e.data); } catch {}
         });
-        server.addEventListener('message', evt => {
-          try { upstream.send(evt.data); } catch {}
-        });
-
-        upstream.addEventListener('close', evt => {
-          try { server.close(evt.code || 1000, evt.reason || ''); } catch {}
-        });
-        server.addEventListener('close', evt => {
-          try { upstream.close(evt.code || 1000, evt.reason || ''); } catch {}
+        serverWs.addEventListener('message', e => {
+          try { upstream.send(e.data); } catch {}
         });
 
+        // Bidirectional close pipe
+        upstream.addEventListener('close', e => {
+          try { serverWs.close(e.code || 1000, e.reason || ''); } catch {}
+        });
+        serverWs.addEventListener('close', e => {
+          try { upstream.close(e.code || 1000, e.reason || ''); } catch {}
+        });
+
+        // Error handling
         upstream.addEventListener('error', () => {
-          try { server.close(1011, 'upstream error'); } catch {}
+          try { serverWs.close(1011, 'upstream error'); } catch {}
         });
-        server.addEventListener('error', () => {
+        serverWs.addEventListener('error', () => {
           try { upstream.close(1011, 'client error'); } catch {}
         });
 
-        return new Response(null, { status: 101, webSocket: client });
+        return new Response(null, { status: 101, webSocket: clientWs });
       }
 
-      // Fallback: return the response as-is (shouldn't happen)
-      return new Response('WebSocket upgrade not supported by upstream', { status: 502 });
+      // If no webSocket in response, return error info for debugging
+      const body = await upstreamResp.text();
+      return new Response(`WS upgrade failed. Status: ${upstreamResp.status}. Body: ${body.substring(0, 200)}`, { 
+        status: 502,
+        headers: { 'Access-Control-Allow-Origin': '*' }
+      });
+
     } catch (err) {
-      return new Response(`WS Proxy error: ${err.message}`, { status: 502 });
+      return new Response(`WS Proxy error: ${err.message}\nStack: ${err.stack}`, { 
+        status: 502,
+        headers: { 'Access-Control-Allow-Origin': '*' }
+      });
     }
   }
 
   // Regular HTTP proxy
-  const targetUrl = `https://${targetHost}/${remainingPath}`;
   try {
+    const proxyHeaders = new Headers();
+    proxyHeaders.set('Host', targetHost);
+    // Copy relevant headers from original request
+    for (const [key, val] of request.headers.entries()) {
+      if (!key.startsWith('cf-') && key !== 'host') {
+        proxyHeaders.set(key, val);
+      }
+    }
+    proxyHeaders.set('Host', targetHost);
+
     const response = await fetch(targetUrl, {
       method: request.method,
-      headers: { 'Host': targetHost },
+      headers: proxyHeaders,
       body: request.method !== 'GET' && request.method !== 'HEAD' ? request.body : undefined,
     });
 
