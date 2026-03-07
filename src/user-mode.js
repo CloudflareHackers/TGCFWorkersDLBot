@@ -331,6 +331,7 @@ function renderAccountSwitcher(accounts, activeIdx) {
       <span class="account-option-name">${escHtml(a.name || 'Unknown')}</span>
       <span class="account-option-detail">${escHtml(a.phone || '')} ${a.username ? `@${a.username}` : ''}</span>
       ${isActive ? '<span class="account-option-check">✓</span>' : ''}
+      <button class="btn-outline btn-sm account-remove-btn" data-remove-idx="${a.idx}" style="padding:2px 8px; font-size:0.7rem; margin-left:4px; width:auto;" title="Remove account">🗑️</button>
     </div>`;
   }).join('');
 
@@ -461,6 +462,30 @@ function bindUserEvents(addLog, switchMode) {
   document.getElementById('btnAddAccountDropdown')?.addEventListener('click', () => {
     document.getElementById('accountDropdown')?.classList.add('hidden');
     startAddAccount();
+  });
+
+  // Per-account remove buttons
+  document.querySelectorAll('.account-remove-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation(); // Don't trigger account switch
+      const idx = parseInt(btn.dataset.removeIdx);
+      if (confirm(`Remove this account? Session data will be cleared.`)) {
+        const client = new TGUserClient(() => {}, () => {}, idx);
+        client.clearSession();
+        userLog('info', `Account #${idx} removed.`);
+        // If removing active account, disconnect
+        if (idx === getActiveAccountIndex() && userClient) {
+          userClient.disconnect().catch(() => {});
+          userClient = null;
+        }
+        const remaining = getAccounts();
+        if (remaining.length > 0) setActiveAccountIndex(remaining[0].idx);
+        else localStorage.removeItem('tgcf_active_account');
+        // Re-render
+        const app = document.getElementById('app');
+        if (app && window._userModeSwitchMode) renderUserMode(app, addLog, switchMode);
+      }
+    });
   });
 
   // User Settings
@@ -654,7 +679,23 @@ async function autoReconnectUser(addLog) {
       onUserLoggedIn();
     } else {
       setUserStatus('disconnected');
-      userLog('warn', 'Session expired. Please login again.');
+      userLog('warn', 'Session expired. Auto-cleaning...');
+      // Auto-clean expired session
+      const tempClean = new TGUserClient(() => {}, () => {});
+      tempClean.clearSession();
+      userClient = null;
+      const remainingAccounts = getAccounts();
+      if (remainingAccounts.length > 0) {
+        setActiveAccountIndex(remainingAccounts[0].idx);
+      } else {
+        localStorage.removeItem('tgcf_active_account');
+      }
+      // Re-render to show clean state
+      if (window._userModeSwitchMode) {
+        const app = document.getElementById('app');
+        renderUserMode(app, window._userModeAddLog || userLog, window._userModeSwitchMode);
+        return;
+      }
     }
   } catch (e) {
     setUserStatus('disconnected');
