@@ -86,15 +86,7 @@ npx wrangler deploy
 
 The proxy works on the **free Cloudflare plan** by default (SQLite-backed Durable Objects).
 
-For heavy usage, upgrade to the **Workers Paid plan** ($5/month) and change `wrangler.toml`:
-
-```toml
-# Free plan (default):
-new_sqlite_classes = ["WebSocketProxy"]
-
-# Paid plan (higher limits):
-new_classes = ["WebSocketProxy"]
-```
+For heavy usage, upgrade to the **Workers Paid plan** ($5/month)
 
 **Paid plan benefits:** 10M+ requests/month, 1M+ DO operations, global low-latency, no daily limits, detailed analytics.
 
