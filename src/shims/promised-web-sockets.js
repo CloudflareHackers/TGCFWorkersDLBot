@@ -11,14 +11,31 @@
 const closeError = new Error('WebSocket was closed');
 
 // Telegram DC IP → WebSocket hostname mapping
+// Includes both primary and download (-1) DC IPs
 const DC_IP_TO_WS_HOST = {
+  // DC1
   '149.154.175.53': 'pluto.web.telegram.org',
+  '149.154.175.54': 'pluto.web.telegram.org',
+  // DC2
   '149.154.167.50': 'venus.web.telegram.org',
-  '149.154.175.100': 'aurora.web.telegram.org',
-  '149.154.167.91': 'vesta.web.telegram.org',
-  '149.154.171.5': 'flora.web.telegram.org',
-  // Test servers
+  '149.154.167.51': 'venus.web.telegram.org',
   '149.154.167.40': 'venus.web.telegram.org',
+  '149.154.167.41': 'venus.web.telegram.org',
+  // DC3
+  '149.154.175.100': 'aurora.web.telegram.org',
+  '149.154.175.101': 'aurora.web.telegram.org',
+  // DC4
+  '149.154.167.91': 'vesta.web.telegram.org',
+  '149.154.167.92': 'vesta.web.telegram.org',
+  '149.154.167.90': 'vesta.web.telegram.org',
+  // DC5
+  '149.154.171.5': 'flora.web.telegram.org',
+  '149.154.171.6': 'flora.web.telegram.org',
+  '91.108.56.100': 'flora.web.telegram.org',
+  '91.108.56.101': 'flora.web.telegram.org',
+  // Additional known IPs
+  '91.108.56.130': 'vesta.web.telegram.org',
+  '91.108.4.204': 'venus-1.web.telegram.org',
 };
 
 // Also match by DC ID (used as fallback)
@@ -93,12 +110,20 @@ export class PromisedWebSockets {
 
   /**
    * Resolve a Telegram DC IP address to its WebSocket hostname.
-   * Falls back to the raw IP if no mapping is found (e.g. already a hostname).
+   * Falls back to a generic Telegram WebSocket host for unknown IPs.
    */
   resolveHost(ip) {
     // If it's already a hostname (contains letters), use it directly
     if (/[a-zA-Z]/.test(ip)) return ip;
-    return DC_IP_TO_WS_HOST[ip] || ip;
+    // Check our known mapping
+    if (DC_IP_TO_WS_HOST[ip]) return DC_IP_TO_WS_HOST[ip];
+    // For any unknown Telegram IP (149.154.* or 91.108.*), use a generic WS host
+    // All Telegram WebSocket endpoints route to the correct DC internally
+    if (ip.startsWith('149.154.') || ip.startsWith('91.108.')) {
+      console.warn(`[WS] Unknown Telegram IP ${ip}, using venus.web.telegram.org as fallback`);
+      return 'venus.web.telegram.org';
+    }
+    return ip;
   }
 
   getWebSocketLink(ip, port) {
